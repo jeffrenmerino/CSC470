@@ -1,0 +1,116 @@
+---
+title: "Specifications for a Visualization Recommendation Bot"
+author: "Jeffren Merino"
+date: "2026-02-16"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    theme: cosmo
+    highlight: tango
+---
+
+## Introduction
+
+This document outlines the specifications for a "Visualization Advisor Bot", an AI assistant designed to help users choose appropriate data visualizations based on their data and goals. The assignment required me to draft initial specifications, consult with an AI (Claude) to refine the context needed and then revise the specifications based on that conversation. The final product is a detailed set of requirements that could guide the development of such a bot.
+
+## Initial Specifications
+
+### Core Purpose
+Help users, from beginners to intermediate, select appropriate visualizations for their data and analytical questions.
+
+### Initial Capabilities
+- Ask about data structure (variable types, number of variables).
+- Ask about the analytical question (comparison, distribution, relationship, composition).
+- Recommend 1 to 3 suitable chart types with reasoning.
+- Provide basic R/ggplot2 code to create the recommended chart.
+- Offer tips on customization and common pitfalls.
+
+### Assumed Context
+- Knowledge of data types (numeric, categorical).
+- Familiarity with ggplot2 syntax.
+- Awareness of common visualization principles, such as Grammar of Graphics.
+
+## AI Consultation
+
+To refine the specifications, I asked Claude three follow‑up questions. Below is the link of the full exchange.
+
+**[AI Chat Transcript](https://claude.ai/share/da3f903d-65ac-46ff-bf2f-47dfd4019b3c)**
+
+## Key Insights from the AI
+
+From Claude’s responses, I identified several key additions that my initial design missed:
+
+- **Data characteristics beyond type:** The bot should ask about volume, dimensionality, skewness, outliers, missing data, and temporal granularity.
+- **Audience and purpose:** Who will see the chart and in what medium influences design choices.
+- **User skill level:** Tailoring code complexity and explanations to the user’s expertise.
+- **Practical constraints:** Colorblind‑friendliness, output format, and size limitations.
+- **Adaptive conversation flow:** Instead of asking everything upfront, use a tiered approach and progressive disclosure.
+- **Principled recommendation engine:** Ground suggestions in perceptual science (Cleveland & McGill) and design principles (Tufte, Few, etc.).
+
+These insights show that a truly helpful bot must go far beyond a simple decision tree.
+
+## Revised Specifications
+
+### Data Context
+- **Volume & dimensionality:** Ask for number of rows and columns to assess overplotting and complexity.
+- **Data characteristics:** Inquire about skewness, outliers, missing data patterns, and whether data are aggregated.
+- **Temporal granularity:** If time series, determine granularity (hourly, daily, yearly).
+
+### Analytical Context
+- **Audience & purpose:** Identify whether the chart is for technical peers, executives, or the public, and whether it will appear in a report, dashboard, or presentation.
+- **Exploratory vs. explanatory:** Adjust recommendations based on whether the user is exploring data or explaining a known finding.
+- **Specific needs:** Ask about highlighting, interactivity, uncertainty visualization, etc.
+
+### Practical Constraints
+- **User’s skill level:** Assess comfort with R/ggplot2 to decide level of code detail.
+- **Output medium:** Determine if the chart will be printed, viewed on screen or embedded.
+- **Color constraints:** Check for colorblind‑friendly requirements or brand colors.
+- **Size constraints:** Small multiples vs. full‑page chart.
+
+### Adaptive Question Flow
+Instead of a fixed questionnaire, the bot will:
+
+1. Start with essential questions (data types, primary question, audience).
+2. Branch based on answers (if numeric data, ask about distribution; if categorical, ask about number of categories).
+3. Make reasonable assumptions and state them transparently (“I’m assuming a static report, let me know if you need interactivity”).
+
+### Recommendation Logic with Principles
+The bot will use a scoring system that incorporates perceptual and design principles:
+
+- **Cleveland & McGill hierarchy:** Prefer position encodings (bar charts, scatter plots) over area/angle (pie charts, bubble charts) for precise comparisons.
+- **Tufte’s data-ink ratio:** Recommend minimal themes, avoid chartjunk, suggest small multiples.
+- **Gestalt principles:** Use color strategically, suggest grouping.
+- **Color theory:** Recommend appropriate palettes (qualitative, sequential, diverging) and check for colorblind safety.
+
+A decision tree will rank options:
+
+1. **Filter by compatibility** (data structure rules out certain charts).
+2. **Score by principles** (higher score = better match).
+3. **Present primary recommendation** with explanation, and mention alternatives if they offer meaningful trade offs.
+4. **Include warnings** when a user’s request violates best practices, with a suggested alternative.
+
+### Code Generation
+- Provide complete, runnable ggplot2 code with comments explaining key options.
+- Offer variations (like faceting or themes) for customization.
+- When appropriate, suggest interactive alternatives with a brief explanation.
+
+### Example Scenarios
+- **Many categories (>10):** Suggest a sorted bar chart or lollipop chart; warn against pie charts.
+- **Large dataset (>1000 points):** Recommend binning (hexbin), transparency, or sampling; mention overplotting.
+- **Skewed data:** Suggest log scale transformation or using a different chart type (such as box plot).
+- **Time series with multiple series:** Recommend small multiples or faceting.
+
+### How AI Input Was Used
+- **Data characteristics, audience, skill level** → added after Claude’s first response.
+- **Adaptive flow** → inspired by Claude’s suggestion to avoid overwhelming the user.
+- **Principle‑based scoring** → built from Claude’s detailed explanation of Cleveland & McGill, Tufte, etc.
+- **Warnings & red flags** → incorporated to prevent common mistakes.
+
+## Conclusion
+
+The conversation with Claude revealed gaps in my initial thinking and provided concrete ways to embed visualization best practices into the bot’s logic. By incorporating data characteristics, audience needs and perceptual principles, the revised specifications create a bot that is not only technically useful but also educational since it can explain why a certain chart is appropriate. This exercise demonstrates how AI can serve as a thought partner in the design process, helping to surface considerations that might otherwise be overlooked.
+
+
