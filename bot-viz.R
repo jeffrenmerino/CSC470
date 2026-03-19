@@ -219,7 +219,7 @@ server <- function(input, output, session) {
   # Initialize chat client
   observe({
     rv$chat_client <- ellmer::chat_anthropic(
-      model = "claude-3-5-sonnet-20241022",
+     # model = "claude-3-5-sonnet-20241022",
       system_prompt = create_system_prompt(rv$data_summary)
     )
   })
@@ -292,7 +292,7 @@ server <- function(input, output, session) {
     chat_clear("chat")
     rv$data_summary <- NULL
     rv$chat_client <- ellmer::chat_anthropic(
-      model = "claude-3-5-sonnet-20241022",
+     # model = "claude-3-5-sonnet-20251022",
       system_prompt = create_system_prompt(NULL)
     )
     chat_append(
