@@ -125,34 +125,57 @@ base_prompt <- function() {
 
 You are a senior data visualization advisor grounded in perceptual science.
 
-## Foundations
-- Cleveland and McGill perceptual hierarchy: position beats length beats angle beats area.
-- Tufte: data-ink ratio, integrity, small multiples.
-- Few: clarity for business audiences.
+## Perceptual foundations
+Cleveland and McGill hierarchy: position at a common baseline beats length beats angle beats area beats saturation beats hue. Always choose the highest-ranked encoding available for the primary comparison.
+Tufte: maximize data-ink ratio. Strip every gridline, border, and fill that does not carry information. No chartjunk, no 3D effects, no redundant encodings. Every pixel must earn its place.
+Few: a chart for a business or academic audience must land its single message in under three seconds. One chart, one message. Label data directly instead of a legend whenever there are five or fewer groups.
 
 ## Voice
-Concise. Decisive. Pedagogical. Lead with the recommendation. Then the why (citing a principle by name). Then the code.
-Two short paragraphs is plenty. Avoid bullet salads.
-Never use em dashes. Use commas, periods, colons, or parentheses.
+Concise. Decisive. Pedagogical. Lead with the recommendation. Then the why, citing a principle by name. Then the code.
+Two short paragraphs is plenty. No bullet lists. No em dashes. Use commas, periods, colons, or parentheses.
 
-## Decision rules
-Comparisons: vertical bars for up to seven categories, horizontal bars beyond. Never pie with more than five slices.
-Distributions: histogram or boxplot below 100 rows, density above 1000, violins for up to five groups, faceted histograms beyond.
-Relationships: scatter. With heavy overplotting use alpha or hexbin. Color groups, capped at five to seven colors.
-Composition: stacked bars by default. Treemap when there are many small parts.
-Time series: line. Bank toward 45 degrees. Maximum five lines.
+## Chart selection rules
+
+Comparisons (up to 7 categories): vertical bars, ALWAYS sorted by value descending (reorder(category, value)).
+Comparisons (more than 7 categories): horizontal bars, sorted descending by value.
+Never pie charts with more than 4 slices. Never 3D charts of any kind.
+
+Distributions (under 200 rows): histogram with bins chosen by the Scott or Sturges rule, or boxplot for cross-group comparison.
+Distributions (200-1000 rows): density plot or violin for groups (max 5 groups). Boxplot plus jitter for small group sizes.
+Distributions (over 1000 rows): density plot or ridgeline (ggridges). Never use default 30-bin histogram on large data.
+
+Relationships (under 300 rows): scatter plot, ALWAYS include geom_smooth(method = "lm", se = FALSE, color = "#555", linewidth = 0.8) to show the trend. Without a trend line the reader cannot judge the relationship.
+Relationships (300-2000 rows): scatter with alpha = 0.25 and geom_smooth.
+Relationships (over 2000 rows): geom_hex() or geom_density_2d_filled(). Never plot raw points at this scale. Overplotting destroys the signal entirely.
+
+Time series: line chart. ALWAYS sort by the time column with arrange() before plotting. Without sorting the line looks random. Maximum 5 lines. If there are more series, aggregate or facet. Aspect ratio should bank slopes near 45 degrees.
+
+Composition / part-of-whole: stacked bar for up to 5 categories. Treemap for many small parts. Never stacked area with more than 4 series.
+
+## Mandatory code quality rules (apply to EVERY render_plot call, no exceptions)
+1. Theme: always start with theme_minimal(base_size = 13).
+2. White background: always add theme(plot.background = element_rect(fill = "white", color = NA), panel.background = element_rect(fill = "white", color = NA)).
+3. Labels: always include labs(x = "<descriptive axis name>", y = "<descriptive axis name>", title = "<one clear insight>"). Use the actual column names and units, not placeholder words.
+4. Sorted axes: for any bar or column chart wrap the categorical variable as reorder(category_col, value_col) or reorder(category_col, -value_col) so bars are ordered by magnitude, never alphabetically.
+5. Color: for categorical groups use scale_fill_brewer(palette = "Set2") or scale_color_brewer(palette = "Set2"). For continuous use scale_fill_distiller(palette = "Blues", direction = 1). Never use the default ggplot2 rainbow color cycle.
+6. Aggregation: for bar or column charts with more than 200 raw rows, ALWAYS aggregate with dplyr (group_by + summarise) before plotting. Never plot one bar per raw row.
+7. Overplotting: for scatter or point charts always set alpha explicitly. Start at 0.5 for under 100 rows, 0.3 for 100-500, 0.15 for over 500.
+8. Legend pruning: remove legends that duplicate axis labels using guides(fill = "none") or guides(color = "none"). A legend is only needed when the color encoding conveys information not already on an axis.
+9. Final expression: assign the plot to p then write p on the last line so the tool can capture it.
 
 ## Tools you have
-You have three tools. Use them. Do not just print code blocks for the user to copy.
+Use all three tools. Do not write code blocks for the user to copy manually.
 
-1. render_plot(code, caption): render a ggplot inline. Call this every time you recommend a chart. The tool returns a markdown image link, embed it verbatim on its own line right after your explanation. Always pair every rendered plot with one short paragraph of reasoning.
-2. summarise_data(code): run dplyr or base R against the active dataset and get text back. Use this for counts, means, top-N, missing values, group-bys, or any quantitative answer that does not need a chart. Inside this tool the data is named `df`.
-3. get_dataset_info(): get shape, column names, types, and a 3-row preview. Call this if you are unsure about column names before writing code.
+1. render_plot(code, caption): renders a ggplot inline. Call this every time you recommend a chart. The tool returns a markdown image link. Embed it verbatim on its own line right after your explanation. Pair every rendered plot with one short paragraph of reasoning.
+2. summarise_data(code): runs dplyr or base R on the active dataset and returns text. The data is named df. Use for counts, means, quantiles, top-N, group-bys, and any quantitative answer that does not need a chart.
+3. get_dataset_info(): returns shape, column names, types, and a 3-row preview. Call this if unsure about column names before writing any code.
 
-If a tool returns an error, read it, fix the code, and call again before answering. Never apologize for tool failures, just retry silently.
+If a tool returns an error, read the message, fix the code, and retry silently. Never apologize for tool failures.
 
 ## Data binding
-When the user has an active dataset, real column names are listed below. Always use them. Inside render_plot the data is named `uploaded_data`. Inside summarise_data it is named `df`. Never use placeholder names like x or y.
+Inside render_plot: data is bound as `uploaded_data`.
+Inside summarise_data: data is bound as `df`.
+Always use the exact column names listed in the Active dataset section below. Never use placeholder names like x or y.
 '
 }
 
@@ -305,19 +328,25 @@ build_chat_client <- function(rv, summary = NULL) {
     chat,
     make_plot_tool(rv),
     paste(
-      "Render a ggplot2 chart inline in the user's chat.",
-      "Call this whenever you recommend a visualization, every single time.",
-      "The user sees the rendered image, not just the code.",
+      "Render a ggplot2 chart inline in the user's chat. Call this every time you recommend a visualization.",
+      "The user sees the rendered image, not the code.",
+      "EVERY call must: use theme_minimal(base_size=13), add a white background via theme(plot.background=element_rect(fill='white',color=NA),panel.background=element_rect(fill='white',color=NA)),",
+      "include labs() with descriptive x/y/title using real column names,",
+      "sort bars with reorder(), use scale_fill_brewer(palette='Set2') for categorical color,",
+      "aggregate >200-row data before bar charts, add geom_smooth() to every scatter,",
+      "use geom_hex() for scatter with >2000 rows, set explicit alpha for points,",
+      "assign the plot to p and end with p on the last line.",
       "Pair every rendered plot with a short paragraph of reasoning."
     ),
     list(
       code = type_string(paste(
-        "Complete and executable ggplot2 R code that produces a ggplot object.",
-        "Use real column names from the active dataset.",
-        "Reference the data as `uploaded_data` (which is bound in R).",
-        "End with the ggplot expression itself."
+        "Complete executable ggplot2 R code. Data is named `uploaded_data`.",
+        "Use only real column names from the active dataset.",
+        "Apply all mandatory quality rules: theme_minimal, white background, labs(), reorder(), Set2 colors,",
+        "aggregate large data, geom_smooth on scatter, geom_hex for >2k rows, explicit alpha.",
+        "Last line must be: p"
       )),
-      caption = type_string("Short caption for the plot, for example 'Sales by region'.")
+      caption = type_string("Short descriptive caption, e.g. 'Sales by region (sorted)'.")
     ),
     "render_plot"
   )
@@ -1160,7 +1189,24 @@ ui <- page_fillable(
           id      = "chat-card",
           fill    = TRUE,
           padding = 0,
-          chat_ui("chat", height = "100%", fill = TRUE)
+          chat_ui(
+            "chat",
+            height   = "100%",
+            fill     = TRUE,
+            messages = list(
+              list(
+                role    = "assistant",
+                content = paste0(
+                  "**Viz Advisor.**\n\n",
+                  "The right chart for your data, rendered instantly.\n\n",
+                  "Load a dataset from the sidebar, then tell me what you want to see. ",
+                  "I\u2019ll pick the right chart type, explain the reasoning, and render it right here in the chat, ",
+                  "every recommendation grounded in Cleveland and McGill, Tufte, and Few.\n\n",
+                  "_No data yet? Click **Load example dataset** in the sidebar and ask away._"
+                )
+              )
+            )
+          )
         )
       )
     ),
@@ -1490,20 +1536,21 @@ server <- function(input, output, session) {
     chat_append("chat", stream)
   })
   
-  # ── Initialize chat on first connect ────────────────────────────────────
+  # ── Initialize chat client on session start ──────────────────────────────
+  # The greeting is pre-rendered via chat_ui(messages=...) in the UI, so we
+  # only need to build the client here. No chat_append_message needed.
   observe({
-    rv$chat_client <- build_chat_client(rv, rv$data_summary)
-    
+    rv$chat_client <- build_chat_client(rv, NULL)
     welcome <- paste0(
-      "Welcome.\n\n",
-      "I help you pick effective charts and render them right here in the chat. ",
-      "Recommendations are grounded in Cleveland and McGill, Tufte, and Few.\n\n",
-      "Pick a data source on the left, or just describe what you have and I'll guide you."
+      "**Viz Advisor.**\n\n",
+      "The right chart for your data, rendered instantly.\n\n",
+      "Load a dataset from the sidebar, then tell me what you want to see. ",
+      "I\u2019ll pick the right chart type, explain the reasoning, and render it right here in the chat, ",
+      "every recommendation grounded in Cleveland and McGill, Tufte, and Few.\n\n",
+      "_No data yet? Click **Load example dataset** in the sidebar and ask away._"
     )
-    chat_clear("chat")
-    chat_append_message("chat", list(role = "assistant", content = welcome))
     rv$chat_history <- list(list(role = "assistant", content = welcome))
-  }) |> bindEvent(session$clientData, once = TRUE, ignoreNULL = FALSE)
+  }) |> bindEvent(session$clientData$url_protocol, once = TRUE)
   
   # ── Chat input handling ─────────────────────────────────────────────────
   observeEvent(input$chat_user_input, {
@@ -1534,8 +1581,8 @@ server <- function(input, output, session) {
     rv$chat_client <- build_chat_client(rv, NULL)
     
     welcome <- paste0(
-      "Reset complete.\n\n",
-      "Pick a data source on the left, or describe your data and I'll guide you."
+      "**Viz Advisor.**\n\n",
+      "Fresh start. Load a dataset from the sidebar, then tell me what you want to see."
     )
     chat_clear("chat")
     chat_append_message("chat", list(role = "assistant", content = welcome))
@@ -1601,6 +1648,49 @@ server <- function(input, output, session) {
     }
   })
   
+  # Helper: coerce any column type that JSON/DT cannot serialize to a safe string.
+  # Order of checks matters: most-specific classes must come before is.atomic().
+  sanitize_for_dt <- function(df) {
+    as.data.frame(
+      lapply(df, function(col) {
+        # 1. Multi-dimensional objects (matrix/array/nested data.frame)
+        if (!is.null(dim(col))) {
+          return(apply(col, 1, function(x) paste(as.character(x), collapse = ", ")))
+        }
+        # 2. Date/time types — must come before is.atomic() because Date,
+        #    POSIXct, difftime, hms are all atomic but need special formatting.
+        if (inherits(col, c("POSIXct", "POSIXlt"))) {
+          return(format(as.POSIXct(col), "%Y-%m-%d %H:%M:%S"))
+        }
+        if (inherits(col, "Date")) {
+          return(format(col, "%Y-%m-%d"))
+        }
+        if (inherits(col, c("hms", "difftime"))) {
+          return(as.character(col))
+        }
+        # 3. Factor — as.vector() would give integers; use as.character() instead.
+        if (is.factor(col)) {
+          return(as.character(col))
+        }
+        # 4. List-columns (e.g. from tidyr::nest or I()-wrapped lists)
+        if (is.list(col)) {
+          return(vapply(col, function(x) {
+            if (length(x) == 0 || is.null(x)) NA_character_
+            else paste(as.character(x), collapse = "; ")
+          }, character(1)))
+        }
+        # 5. Plain atomic vectors (numeric, integer, character, logical) — safe as-is.
+        if (is.atomic(col)) {
+          return(col)
+        }
+        # 6. Fallback for S4 objects, environments, etc.
+        return(as.character(col))
+      }),
+      stringsAsFactors = FALSE,
+      check.names      = FALSE
+    )
+  }
+  
   output$data_preview_table <- renderDT({
     if (is.null(rv$data_summary)) {
       datatable(
@@ -1608,15 +1698,37 @@ server <- function(input, output, session) {
         options = list(dom = "t"), rownames = FALSE
       )
     } else {
-      datatable(
-        head(get("uploaded_data", envir = .GlobalEnv), 200),
-        options = list(pageLength = 10, scrollX = TRUE, dom = "frtip",
-                       autoWidth = FALSE),
-        class    = "cell-border stripe hover compact",
-        rownames = FALSE
-      )
+      tryCatch({
+        df_raw  <- head(get("uploaded_data", envir = .GlobalEnv), 200)
+        df_safe <- sanitize_for_dt(df_raw)
+        names(df_safe) <- names(df_raw)
+        
+        # BRUTAL ASSERTION: Force every column to be a strict 1D atomic vector.
+        # If any column slipped through as a list, matrix, or complex object,
+        # it will explode DataTables JS. This assertion forces the tryCatch
+        # to intercept it cleanly and return the fallback table.
+        for (i in seq_along(df_safe)) {
+          if (is.list(df_safe[[i]]) || !is.atomic(df_safe[[i]]) || is.matrix(df_safe[[i]])) {
+            stop(sprintf("Column '%s' is not a flat atomic vector.", names(df_safe)[i]))
+          }
+        }
+        
+        datatable(
+          df_safe,
+          options = list(pageLength = 10, scrollX = TRUE, dom = "frtip",
+                         autoWidth = FALSE),
+          class    = "cell-border stripe hover compact",
+          rownames = FALSE
+        )
+      }, error = function(e) {
+        datatable(
+          data.frame(Error = paste("Preview unavailable:", conditionMessage(e))),
+          options = list(dom = "t"),
+          rownames = FALSE
+        )
+      })
     }
-  })
+  }, server = FALSE)
   
   output$numeric_cols_info <- renderUI({
     s <- rv$data_summary
