@@ -36,15 +36,21 @@ shiny::addResourcePath("vaplots", PLOT_ROOT)
 # ============================================================================
 
 # Scan the working directory for tabular files.
+# Restricted to .csv / .tsv. Plain .txt is ambiguous (api keys, READMEs, logs)
+# and was previously surfacing api-key.txt as a selectable "dataset".
 scan_working_dir <- function(path = getwd()) {
   if (!dir.exists(path)) return(character(0))
   files <- list.files(
     path,
-    pattern = "\\.(csv|tsv|txt)$",
+    pattern = "\\.(csv|tsv)$",
     ignore.case = TRUE,
     recursive  = TRUE,
     full.names = FALSE
   )
+  # Defensive: never expose anything that looks like a credential, even if
+  # the pattern above is later relaxed to include .txt again.
+  files <- files[!grepl("(^|/)(api[-_ ]?key|secret|token|credentials)",
+                        files, ignore.case = TRUE)]
   if (!length(files)) return(character(0))
   full <- file.path(path, files)
   setNames(full, files)
@@ -69,13 +75,25 @@ scan_global_env <- function() {
 }
 
 # Read a delimited file into a data.frame.
+# Validates that the result actually looks tabular (>= 1 row, >= 2 cols).
+# Anything else (single-line API keys, prose .txt, etc.) is rejected cleanly
+# instead of becoming a one-column "dataframe".
 read_tabular <- function(path) {
-  ext <- tools::file_ext(path)
-  if (tolower(ext) == "tsv") {
+  ext <- tolower(tools::file_ext(path))
+  df <- if (ext == "tsv") {
     read_tsv(path, show_col_types = FALSE)
   } else {
     read_csv(path, show_col_types = FALSE)
   }
+  if (!is.data.frame(df) || nrow(df) < 1 || ncol(df) < 2) {
+    stop(sprintf(
+      "%s does not look like a tabular file (got %d rows x %d cols). Pick a CSV or TSV with a header row and at least two columns.",
+      basename(path),
+      if (is.data.frame(df)) nrow(df) else 0,
+      if (is.data.frame(df)) ncol(df) else 0
+    ), call. = FALSE)
+  }
+  as.data.frame(df)
 }
 
 # Build a structural summary for a data.frame.
@@ -124,13 +142,17 @@ Relationships: scatter. With heavy overplotting use alpha or hexbin. Color group
 Composition: stacked bars by default. Treemap when there are many small parts.
 Time series: line. Bank toward 45 degrees. Maximum five lines.
 
-## Render plots in the chat
-You have a tool called render_plot. Whenever you recommend a chart, call it with complete executable ggplot2 code and a short caption. The tool returns a markdown image link. Embed that link verbatim on its own line in your reply, immediately after the explanation. Always pair the rendered image with one short paragraph that explains the choice.
+## Tools you have
+You have three tools. Use them. Do not just print code blocks for the user to copy.
 
-If the code fails, read the error from the tool result, fix the code, and call render_plot again before answering.
+1. render_plot(code, caption): render a ggplot inline. Call this every time you recommend a chart. The tool returns a markdown image link, embed it verbatim on its own line right after your explanation. Always pair every rendered plot with one short paragraph of reasoning.
+2. summarise_data(code): run dplyr or base R against the active dataset and get text back. Use this for counts, means, top-N, missing values, group-bys, or any quantitative answer that does not need a chart. Inside this tool the data is named `df`.
+3. get_dataset_info(): get shape, column names, types, and a 3-row preview. Call this if you are unsure about column names before writing code.
+
+If a tool returns an error, read it, fix the code, and call again before answering. Never apologize for tool failures, just retry silently.
 
 ## Data binding
-When the user has an active dataset, real column names are listed below. Always use them. The data frame is bound in R as `uploaded_data` in the global environment. Never use placeholder names like x or y.
+When the user has an active dataset, real column names are listed below. Always use them. Inside render_plot the data is named `uploaded_data`. Inside summarise_data it is named `df`. Never use placeholder names like x or y.
 '
 }
 
@@ -210,44 +232,130 @@ make_plot_tool <- function(rv) {
   }
 }
 
-# Build a fresh chat client with the current system prompt and tool registered.
+# Helper: register a tool and tolerate both the new (.name) and old (name)
+# ellmer APIs.
+register_named_tool <- function(chat, fn, description, args, tool_name) {
+  the_tool <- tryCatch(
+    do.call(tool, c(list(fn, description), args, list(.name = tool_name))),
+    error = function(e) {
+      do.call(tool, c(list(fn, description), args, list(name = tool_name)))
+    }
+  )
+  chat$register_tool(the_tool)
+  the_tool
+}
+
+# Tool: run a dplyr / base R summary on the active dataset and return text.
+# Mirrors Tyler's `summarise_data` so the bot can answer "what's the mean of X
+# by Y" without rendering a chart for every question.
+make_summarise_tool <- function() {
+  function(code) {
+    if (!exists("uploaded_data", envir = .GlobalEnv)) {
+      return("No dataset is currently loaded. Ask the user to pick one first.")
+    }
+    df <- get("uploaded_data", envir = .GlobalEnv)
+    env <- new.env(parent = .GlobalEnv)
+    env$df <- df
+    suppressPackageStartupMessages({
+      env$`%>%`     <- magrittr::`%>%`
+      env$n         <- dplyr::n
+      env$summarise <- dplyr::summarise
+      env$group_by  <- dplyr::group_by
+      env$arrange   <- dplyr::arrange
+      env$filter    <- dplyr::filter
+      env$mutate    <- dplyr::mutate
+      env$select    <- dplyr::select
+      env$desc      <- dplyr::desc
+      env$count     <- dplyr::count
+    })
+    out <- tryCatch(
+      eval(parse(text = code), envir = env),
+      error = function(e) paste0("Error: ", conditionMessage(e))
+    )
+    if (is.character(out) && length(out) == 1) return(out)
+    paste(utils::capture.output(print(out)), collapse = "\n")
+  }
+}
+
+# Tool: structural snapshot of the active dataset.
+make_dataset_info_tool <- function() {
+  function() {
+    if (!exists("uploaded_data", envir = .GlobalEnv)) {
+      return("No dataset is currently loaded.")
+    }
+    df <- get("uploaded_data", envir = .GlobalEnv)
+    cols <- vapply(names(df), function(c) {
+      sprintf("%s (%s)", c, class(df[[c]])[1])
+    }, character(1))
+    paste0(
+      "Shape: ", nrow(df), " rows x ", ncol(df), " columns\n",
+      "Columns: ", paste(cols, collapse = ", "), "\n",
+      "First 3 rows:\n",
+      paste(utils::capture.output(print(utils::head(df, 3))), collapse = "\n")
+    )
+  }
+}
+
+# Build a fresh chat client with the current system prompt and tools registered.
 build_chat_client <- function(rv, summary = NULL) {
   chat <- chat_anthropic(system_prompt = build_system_prompt(summary))
-  plot_fn <- make_plot_tool(rv)
   
-  # ellmer's tool() infers the name from the substituted function expression.
-  # Since our function is a closure, give it an explicit name. We try both
-  # newer (.name) and older (name) ellmer APIs to be defensive.
-  the_tool <- tryCatch(
-    tool(
-      plot_fn,
-      paste(
-        "Render a ggplot2 chart inline in the user's chat.",
-        "Call this whenever you recommend a visualization, every single time.",
-        "The user sees the rendered image, not just the code.",
-        "Pair every rendered plot with a short paragraph of reasoning."
-      ),
+  # 1. render_plot — render ggplots inline.
+  register_named_tool(
+    chat,
+    make_plot_tool(rv),
+    paste(
+      "Render a ggplot2 chart inline in the user's chat.",
+      "Call this whenever you recommend a visualization, every single time.",
+      "The user sees the rendered image, not just the code.",
+      "Pair every rendered plot with a short paragraph of reasoning."
+    ),
+    list(
       code = type_string(paste(
         "Complete and executable ggplot2 R code that produces a ggplot object.",
         "Use real column names from the active dataset.",
         "Reference the data as `uploaded_data` (which is bound in R).",
         "End with the ggplot expression itself."
       )),
-      caption = type_string("Short caption for the plot, for example 'Sales by region'."),
-      .name = "render_plot"
+      caption = type_string("Short caption for the plot, for example 'Sales by region'.")
     ),
-    error = function(e) {
-      # Fallback for ellmer versions using `name` instead of `.name`
-      tool(
-        plot_fn,
-        "Render a ggplot2 chart inline in the user's chat. Call this whenever you recommend a visualization.",
-        code = type_string("Complete and executable ggplot2 R code that produces a ggplot object. Reference the data as `uploaded_data`."),
-        caption = type_string("Short caption for the plot."),
-        name = "render_plot"
-      )
-    }
+    "render_plot"
   )
-  chat$register_tool(the_tool)
+  
+  # 2. summarise_data — run dplyr/base R, return text.
+  register_named_tool(
+    chat,
+    make_summarise_tool(),
+    paste(
+      "Run a statistical summary, count, group-by, or arbitrary computation",
+      "on the active dataset and return the result as text.",
+      "Use this for averages, top-N, breakdowns, missing-value checks, and",
+      "any quantitative answer the user asks for that does not need a chart."
+    ),
+    list(
+      code = type_string(paste(
+        "Valid R code that uses a variable named `df` (the active data frame)",
+        "and returns a data frame, vector, or scalar. dplyr verbs (filter,",
+        "group_by, summarise, arrange, mutate, count) and the pipe `%>%` are",
+        "pre-loaded. Do NOT use ggplot here, use render_plot for charts."
+      ))
+    ),
+    "summarise_data"
+  )
+  
+  # 3. get_dataset_info — structural snapshot on demand.
+  register_named_tool(
+    chat,
+    make_dataset_info_tool(),
+    paste(
+      "Get the shape, column names, types, and a 3-row preview of the active",
+      "dataset. Call this if you are unsure about column names or types",
+      "before writing code for render_plot or summarise_data."
+    ),
+    list(),
+    "get_dataset_info"
+  )
+  
   chat
 }
 
@@ -1218,7 +1326,14 @@ server <- function(input, output, session) {
           } else {
             tagList(
               div(style = "font-size: 0.79rem; color: var(--ink-soft); margin-top: 4px; line-height: 1.5;",
-                  "No data frames in the global environment. Load one in your R session, then click rescan."),
+                  "No data frames in the global environment yet."),
+              div(style = "font-size: 0.74rem; color: var(--ink-soft); margin-top: 6px; line-height: 1.5;",
+                  HTML(paste0(
+                    "To test this: in the same R session that is running the app, ",
+                    "type something like <code>data(mtcars)</code> or ",
+                    "<code>df &lt;- read.csv('your.csv')</code> in the console, ",
+                    "then click Rescan."
+                  ))),
               div(class = "src-row",
                   actionButton("rescan_global", tagList(bs_icon("arrow-clockwise"), " Rescan"),
                                class = "btn btn-ghost btn-sm")
@@ -1260,7 +1375,7 @@ server <- function(input, output, session) {
       length(rv$data_summary$categorical_cols), " categorical.\n\n",
       "Tell me what you want to see, or pick one of the suggestions on the left."
     )
-    chat_append("chat", list(role = "assistant", content = msg))
+    chat_append_message("chat", list(role = "assistant", content = msg))
     rv$chat_history <- append(rv$chat_history, list(list(role = "assistant", content = msg)))
   }
   
@@ -1370,7 +1485,7 @@ server <- function(input, output, session) {
     msg <- input$chip_clicked$prompt
     if (is.null(msg) || !nzchar(msg)) return()
     rv$chat_history <- append(rv$chat_history, list(list(role = "user", content = msg)))
-    chat_append("chat", list(role = "user", content = msg))
+    chat_append_message("chat", list(role = "user", content = msg))
     stream <- rv$chat_client$stream_async(msg)
     chat_append("chat", stream)
   })
@@ -1386,7 +1501,7 @@ server <- function(input, output, session) {
       "Pick a data source on the left, or just describe what you have and I'll guide you."
     )
     chat_clear("chat")
-    chat_append("chat", list(role = "assistant", content = welcome))
+    chat_append_message("chat", list(role = "assistant", content = welcome))
     rv$chat_history <- list(list(role = "assistant", content = welcome))
   }) |> bindEvent(session$clientData, once = TRUE, ignoreNULL = FALSE)
   
@@ -1400,7 +1515,7 @@ server <- function(input, output, session) {
       chat_append("chat", stream)
     }, error = function(e) {
       showNotification(paste("AI error:", conditionMessage(e)), type = "error", duration = 8)
-      chat_append("chat", list(
+      chat_append_message("chat", list(
         role = "assistant",
         content = paste0("Error: ", conditionMessage(e), ". Please try again.")
       ))
@@ -1423,7 +1538,7 @@ server <- function(input, output, session) {
       "Pick a data source on the left, or describe your data and I'll guide you."
     )
     chat_clear("chat")
-    chat_append("chat", list(role = "assistant", content = welcome))
+    chat_append_message("chat", list(role = "assistant", content = welcome))
     rv$chat_history <- list(list(role = "assistant", content = welcome))
     showNotification("Conversation reset.", type = "message", duration = 3)
   })
