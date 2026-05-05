@@ -21,7 +21,7 @@ options(shiny.maxRequestSize = 200 * 1024^2)
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 # ── API key ─────────────────────────────────────────────────────────────────
-key_path <- "/usr/home/georgetowncollege.edu/jmerino/test-bot/api-key.txt"
+key_path <- "api-key.txt"
 if (file.exists(key_path) && Sys.getenv("ANTHROPIC_API_KEY") == "") {
   Sys.setenv(ANTHROPIC_API_KEY = readLines(key_path, warn = FALSE)[1])
 }
